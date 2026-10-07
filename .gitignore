@@ -1,0 +1,10 @@
+# Per-project learner notes: never publish these with the plugin.
+.vibe-wise/
+.sensible-vibes/
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/

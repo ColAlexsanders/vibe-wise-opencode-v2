@@ -1,0 +1,15 @@
+{
+  "name": "vibe-wise-opencode-v2",
+  "version": "0.1.0",
+  "description": "VibeWise for OpenCode version 2: learn how to build software while the AI writes the code. Port of nykooi1/vibe-wise (Claude Code plugin, v0.1.43).",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["opencode", "vibe-wise", "vibewise", "learning", "skills"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ColAlexsanders/vibe-wise-opencode-v2.git"
+  },
+  "exports": {
+    ".": "./plugins/vibe-wise/index.ts"
+  }
+}
