@@ -32,6 +32,8 @@ Every change this port makes against upstream [nykooi1/vibe-wise](https://github
 | `skills/vibe-wise-learn/state-templates.md` | Changed the note about the two profile status lines to attribute them to "the VibeWise restore plugin" rather than "the restoration hook". | This port has no separate hook process — the plugin reads `Learning mode:`/`Onboarding:` directly — so the old wording pointed at infrastructure that doesn't exist here. |
 | `skills/vibe-wise-reset/SKILL.md` | Added the `opencode/autoinvoke` field; `learn` → `vibe-wise-learn`; interactive picker → `question` tool; renamed the sibling path; dropped `${CLAUDE_PLUGIN_ROOT}` (via the pi base) | OpenCode field + rename/naming |
 | `skills/vibe-wise-reset/reset.py` | Inlined `state_directory` (dropped the `from session_start import state_directory`) and updated the docstring to reference `plugins/vibe-wise.ts` | Port structure — not a V1→V2 change |
+| `init.py` | New helper that writes the project-local (or `--global`) config, merging rather than overwriting | Avoids pasting the `opencode.json` block by hand for each new project |
+| `tests/` | New: `plugin.test.mjs`, `reset.test.py`, `init.test.py` | Cover restore gating, the reset flow, and the init helper |
 
 ## Requirements
 - OpenCode V2
@@ -40,10 +42,22 @@ Every change this port makes against upstream [nykooi1/vibe-wise](https://github
 ## Install
 The skills and plugin live outside OpenCode's config directory, so point `opencode.json` at them. Replace `<repo>` with the **absolute** path to your clone.
 
+Easiest is the bundled helper, which writes the config for you (paths come from the helper's own location, and it merges rather than overwrites):
+
+```sh
+python3 <repo>/init.py /path/to/project   # one project only
+python3 <repo>/init.py --global           # every project
+python3 <repo>/init.py . --dry-run        # preview
+```
+
+Or add the entries by hand:
+
 - **Everywhere:** add these entries to `~/.config/opencode/opencode.json`.
 - **One project only:** add the same entries to that project's
   `.opencode/opencode.json` instead. Other projects and windows are then
   unaffected.
+
+I recommend making the init.py call an alias
 
 ```jsonc
 {
@@ -94,6 +108,7 @@ Both skills set `disable-model-invocation: true` (for Claude Code) and `metadata
 ```sh
 node tests/plugin.test.mjs      # plugin state lookup + restore gating (Node 22.6+)
 python3 tests/reset.test.py     # reset helper preview / confirm / backup flow
+python3 tests/init.test.py      # init helper merge / idempotency / dry-run
 ```
 
 The plugin is a plain V2 default export (`id` + `setup`) and deliberately does not import `@opencode/plugin`, so it needs no `node_modules` of its own. OpenCode loads `plugins/vibe-wise/index.ts` from the directory named in the `plugins` config entry.
