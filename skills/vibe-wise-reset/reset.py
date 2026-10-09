@@ -17,25 +17,18 @@ import tempfile
 sys.dont_write_bytecode = True
 
 
-def state_directory(cwd):
-    """
-    Find the nearest notes directory without crossing a Git project boundary.
+def state_directory(directory):
+    """Return the notes directory directly under the project directory, or None.
 
-    Mirrors the lookup in plugins/vibe-wise.ts so the reset helper and the
-    session restore plugin always agree on which state belongs to a project.
+    Mirrors the lookup in plugins/vibe-wise/index.ts: both return the path as a
+    string, or None/null when the project has no notes directory.
     """
-    # Starting in a source subdirectory should still find the project's notes.
-    for directory in (cwd, *cwd.parents):
-        # Prefer the new name at the nearest location; keep legacy notes in place.
-        for name in (".vibe-wise", ".sensible-vibes"):
-            state = directory / name
-            if state.exists() or state.is_symlink():
-                # Stop even if this candidate is invalid. Falling back to a parent
-                # could silently load a different project's learner profile.
-                return state if state.is_dir() and not state.is_symlink() else None
-        # A .git file is a worktree boundary too. Never borrow another repo's state.
-        if (directory / ".git").exists():
-            break
+    for name in (".vibe-wise", ".sensible-vibes"):
+        candidate = Path(directory) / name
+        if candidate.exists() or candidate.is_symlink():
+            # Prefer .vibe-wise at this level; stop on an invalid candidate
+            # rather than falling back to a parent or the legacy name.
+            return str(candidate) if candidate.is_dir() and not candidate.is_symlink() else None
     return None
 
 
@@ -52,9 +45,10 @@ FRESH = {
 
 
 def snapshot(cwd):
-    state = state_directory(cwd)
-    if state is None:
+    found = state_directory(cwd)
+    if found is None:
         return None, {}, None
+    state = Path(found)
     notes = {}
     for name in FRESH:
         path = state / name

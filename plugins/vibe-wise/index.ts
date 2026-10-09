@@ -38,8 +38,16 @@ interface PluginContext {
 			name: "context",
 			callback: (event: SessionContextEvent) => Promise<void> | void,
 		): Promise<unknown>
-		get(input: { sessionID: string }): Promise<{ parentID?: string } | undefined>
+		get(input: { sessionID: string }): Promise<
+			{ parentID?: string; location?: { directory?: string } } | undefined
+		>
 	}
+}
+
+/** Cached per-session facts the restore hook needs. */
+interface SessionRef {
+	child: boolean
+	directory: string | null
 }
 
 /** The part of a session "context" hook event this plugin reads and edits. */
@@ -100,6 +108,20 @@ function guideBlock(name: string, text: string): string {
 	return `<vibe-wise-guide file="${name}">\n${text}\n</vibe-wise-guide>`
 }
 
+/** Read the project's AGENTS.md when it sits in the project directory. */
+function readProjectAgents(directory: string): string | null {
+	try {
+		const text = fs.readFileSync(path.join(directory, "AGENTS.md"), "utf8").replace(/\r\n/g, "\n").trim()
+		return text.length > 0 ? text : null
+	} catch {
+		return null
+	}
+}
+
+function projectAgentsBlock(text: string): string {
+	return `<vibe-wise-project-agents file="AGENTS.md">\n${text}\n</vibe-wise-project-agents>`
+}
+
 /** Read activation and onboarding status without copying learner notes into context. */
 function profileStatus(profilePath: string): { active: boolean; onboardingIncomplete: boolean } {
 	let stats: fs.Stats
@@ -130,37 +152,34 @@ function profileStatus(profilePath: string): { active: boolean; onboardingIncomp
 }
 
 /**
- * Find the nearest notes directory without crossing a Git project boundary.
- * Must stay in sync with skills/vibe-wise-reset/reset.py, which implements the
- * same lookup. Exported for tests.
+ * Return the notes directory directly under the project directory, or null.
+ * Scoped to the directory OpenCode reports for this location, so a parent
+ * directory's state is never borrowed and no .git boundary is needed. Must stay
+ * in sync with skills/vibe-wise-reset/reset.py. Exported for tests.
  */
-export function stateDirectory(cwd: string): string | null {
-	let current = path.resolve(cwd)
-	for (;;) {
-		// Prefer the new name at the nearest location; keep legacy notes in place.
-		for (const name of [".vibe-wise", ".sensible-vibes"]) {
-			const candidate = path.join(current, name)
-			let stats: fs.Stats
-			try {
-				stats = fs.lstatSync(candidate)
-			} catch {
-				continue
-			}
-			// Stop even if this candidate is invalid. Falling back to a parent
-			// could silently load a different project's learner profile.
-			return stats.isDirectory() && !stats.isSymbolicLink() ? candidate : null
+export function stateDirectory(directory: string): string | null {
+	for (const name of [".vibe-wise", ".sensible-vibes"]) {
+		const candidate = path.join(directory, name)
+		let stats: fs.Stats
+		try {
+			stats = fs.lstatSync(candidate)
+		} catch {
+			continue
 		}
-		// A .git file is a worktree boundary too. Never borrow another repo's state.
-		if (fs.existsSync(path.join(current, ".git"))) break
-		const parent = path.dirname(current)
-		if (parent === current) break
-		current = parent
+		// Prefer .vibe-wise at this level; stop on an invalid candidate rather
+		// than falling back to a parent or the legacy name.
+		return stats.isDirectory() && !stats.isSymbolicLink() ? candidate : null
 	}
 	return null
 }
 
 /** Build the agent's restoration context for an active state directory. */
-function restorationText(state: string, onboardingIncomplete: boolean, guides: Guides): string {
+function restorationText(
+	state: string,
+	onboardingIncomplete: boolean,
+	guides: Guides,
+	projectAgents: string | null,
+): string {
 	const blocks = [
 		guideBlock("SKILL.md", guides.learnSkill),
 		guideBlock("behavior.md", guides.behavior),
@@ -168,6 +187,8 @@ function restorationText(state: string, onboardingIncomplete: boolean, guides: G
 	]
 	// Onboarding instructions only matter until onboarding is complete.
 	if (onboardingIncomplete) blocks.push(guideBlock("onboarding.md", guides.onboarding))
+	// The project's own instructions travel with the learning guide.
+	if (projectAgents !== null) blocks.push(projectAgentsBlock(projectAgents))
 
 	return [
 		"VibeWise is active for this project. Follow the Learn guide below before responding or coding.",
@@ -187,42 +208,56 @@ export default {
 		let guides: Guides | null = null
 		const getGuides = (): Guides => (guides ??= loadGuides())
 
-		// A session's parent never changes; cache the child check per session.
-		const childCache = new Map<string, boolean>()
-		const isChildSession = async (sessionID: string): Promise<boolean> => {
-			const cached = childCache.get(sessionID)
+		// A session's parent and location never change; cache both per session.
+		const sessionCache = new Map<string, SessionRef>()
+		const sessionRef = async (sessionID: string): Promise<SessionRef> => {
+			const cached = sessionCache.get(sessionID)
 			if (cached !== undefined) return cached
-			let child = false
+			let ref: SessionRef
 			try {
 				const session = await ctx.session.get({ sessionID })
-				child = typeof session?.parentID === "string" && session.parentID !== ""
+				const directory = session?.location?.directory
+				ref = {
+					child: typeof session?.parentID === "string" && session.parentID !== "",
+					directory: typeof directory === "string" && directory !== "" ? directory : null,
+				}
 			} catch {
 				// Treat a failed lookup as the main session and retry on the next call.
-				return false
+				return { child: false, directory: null }
 			}
 			// Bound the cache for long-running servers.
-			if (childCache.size >= 500) {
-				const oldest = childCache.keys().next().value
-				if (oldest !== undefined) childCache.delete(oldest)
+			if (sessionCache.size >= 500) {
+				const oldest = sessionCache.keys().next().value
+				if (oldest !== undefined) sessionCache.delete(oldest)
 			}
-			childCache.set(sessionID, child)
-			return child
+			sessionCache.set(sessionID, ref)
+			return ref
 		}
 
 		await ctx.session.hook("context", async (event) => {
 			// Learning should never prevent a coding session from working.
 			try {
 				if (!event.sessionID) return
+				const ref = await sessionRef(event.sessionID)
 				// Subagent/child sessions do delegated work; checkpoints are the
 				// main session's job.
-				if (await isChildSession(event.sessionID)) return
-				const state = stateDirectory(ctx.location.directory)
+				if (ref.child) return
+				// A session can be moved to another directory; prefer its own location
+				// over the plugin instance's, and note when they differ.
+				let directory = ctx.location.directory
+				if (ref.directory !== null && path.resolve(ref.directory) !== path.resolve(directory)) {
+					console.warn(
+						`vibe-wise: session ${event.sessionID} is in ${ref.directory}, not the plugin location ${directory}; using the session directory`,
+					)
+					directory = ref.directory
+				}
+				const state = stateDirectory(directory)
 				if (state === null) return
 				const status = profileStatus(path.join(state, "profile.md"))
 				if (!status.active) return
 				event.system.push({
 					type: "text",
-					text: restorationText(state, status.onboardingIncomplete, getGuides()),
+					text: restorationText(state, status.onboardingIncomplete, getGuides(), readProjectAgents(directory)),
 				})
 			} catch {
 				// Ignore restore failures; the session continues without guardrails.

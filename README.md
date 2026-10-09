@@ -32,7 +32,7 @@ Every change this port makes against upstream [nykooi1/vibe-wise](https://github
 | `skills/vibe-wise-learn/state-templates.md` | Changed the note about the two profile status lines to attribute them to "the VibeWise restore plugin" rather than "the restoration hook". | This port has no separate hook process — the plugin reads `Learning mode:`/`Onboarding:` directly — so the old wording pointed at infrastructure that doesn't exist here. |
 | `skills/vibe-wise-reset/SKILL.md` | Added the `opencode/autoinvoke` field; `learn` → `vibe-wise-learn`; interactive picker → `question` tool; renamed the sibling path; dropped `${CLAUDE_PLUGIN_ROOT}` (via the pi base) | OpenCode field + rename/naming |
 | `skills/vibe-wise-reset/reset.py` | Inlined `state_directory` (dropped the `from session_start import state_directory`) and updated the docstring to reference `plugins/vibe-wise.ts` | Port structure — not a V1→V2 change |
-| `init.py` | New helper that writes the project-local (or `--global`) config, merging rather than overwriting | Avoids pasting the `opencode.json` block by hand for each new project |
+| `init.py` | New helper that writes the project-local (or `--global`) config, merging rather than overwriting; `--remove` strips only the entries it added and `--delete-notes` also removes `.vibe-wise/` | Avoids pasting the `opencode.json` block by hand, and lets cleanup leave other project settings untouched |
 | `tests/` | New: `plugin.test.mjs`, `reset.test.py`, `init.test.py` | Cover restore gating, the reset flow, and the init helper |
 
 ## Requirements
@@ -48,6 +48,11 @@ Easiest is the bundled helper, which writes the config for you (paths come from 
 python3 <repo>/init.py /path/to/project   # one project only
 python3 <repo>/init.py --global           # every project
 python3 <repo>/init.py . --dry-run        # preview
+
+python3 <repo>/init.py /path/to/project --remove                  # remove the entries again
+python3 <repo>/init.py /path/to/project --remove --delete-notes   # also delete .vibe-wise/
+
+python3 <repo>/init.py --help             # show all options
 ```
 
 Or add the entries by hand:
@@ -91,13 +96,13 @@ Pause anytime by typing "Pause learning" into the chat; resume with `@vibe-wise-
 
 ## How the restore works
 
-OpenCode's session `context` hook runs for every agent-loop request, and edits to its `system` field apply to that outgoing request only. Whenever the project has an active profile, the plugin injects the Learn guides plus a short instruction to restore the learner's profile, map, and pending decisions.
+OpenCode's session `context` hook runs for every agent-loop request, and edits to its `system` field apply to that outgoing request only. Whenever the project has an active profile, the plugin injects the Learn guides plus a short instruction to restore the learner's profile, map, and pending decisions. If the project directory has an `AGENTS.md`, its contents are included too, so project rules travel with the learning guide.
 
 The guides are inlined rather than read from disk, so the injected instructions always match the installed plugin and cannot be shadowed by another copy (for example the repo plus a copy under `.opencode/`). Inlining also saves the agent from re-reading guide files, and avoids external-directory approval for those reads when the plugin is configured as a global install. A short "OpenCode notes"  block translates the Claude Code tool and ommand names the guides use. Child  and subagent sessions are skipped, since learning checkpoints belong to the main session.
 
 This differs from the Claude Code hook, which injected `additionalContext` once at session start and again after compaction. The practical effect is the same or stronger: the guardrails are present at session start, on resume, and after compaction, because the hook rebuilds each request and compaction cannot drop the instruction. The cost is the guides in system context on every request while learning is active.
 
-The activation check and state-directory lookup mirror the original Python exactly: nearest `.vibe-wise/` (or legacy `.sensible-vibes/`) up to the `.git` boundary, never following symlinks, and treating `Learning mode: paused` as inactive.
+The activation check and state-directory lookup are scoped to the project directory OpenCode reports: `.vibe-wise/` (or legacy `.sensible-vibes/`) directly under it, never following symlinks, and treating `Learning mode: paused` as inactive. No `.git` boundary is required. If a session was moved to a different directory, the session's own location is used instead, and the mismatch is written to the log.
 
 ## Auto-invocation
 

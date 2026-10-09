@@ -26,6 +26,12 @@ def read(path):
         return json.load(fh)
 
 
+def write(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+
+
 def main():
     project = tempfile.mkdtemp(prefix="vw-init-")
     try:
@@ -46,15 +52,11 @@ def main():
         assert data["plugins"].count(PLUGIN) == 1, data
 
         # Merge: keeps unrelated entries and an existing command of the same name.
-        with open(config, "w", encoding="utf-8") as fh:
-            json.dump(
-                {
-                    "$schema": "https://opencode.ai/config.json",
-                    "skills": ["/some/other/skill"],
-                    "commands": {"vibe-wise-learn": {"template": "mine"}},
-                },
-                fh,
-            )
+        write(config, {
+            "$schema": "https://opencode.ai/config.json",
+            "skills": ["/some/other/skill"],
+            "commands": {"vibe-wise-learn": {"template": "mine"}},
+        })
         run(project)
         data = read(config)
         assert data["skills"] == ["/some/other/skill", SKILLS], data
@@ -80,6 +82,63 @@ def main():
 
         # A missing directory is an error, not a crash.
         proc = run(os.path.join(project, "does-not-exist"))
+        assert proc.returncode == 2, proc.stdout
+
+        # Abbreviated flags are rejected, so --rem can't select --remove.
+        proc = run(project, "--rem")
+        assert proc.returncode == 2, proc.stdout
+
+        # A second positional argument is rejected too.
+        proc = run(project, project)
+        assert proc.returncode == 2, proc.stdout
+
+        # --help / -h print usage and exit 0.
+        for flag in ("--help", "-h"):
+            proc = run(flag)
+            assert proc.returncode == 0, proc.stdout
+            assert "Usage:" in proc.stdout, proc.stdout
+
+        # --remove strips the helper's entries and leaves other settings intact.
+        keep = {"template": "keep me"}
+        write(config, {
+            "$schema": "https://opencode.ai/config.json",
+            "model": "openai/local-model",
+            "skills": ["/other/skills", SKILLS],
+            "plugins": [PLUGIN],
+            "commands": {"vibe-wise-learn": {"template": "mine"}, "my-command": keep},
+        })
+        proc = run(project, "--remove")
+        assert proc.returncode == 0, proc.stderr
+        data = read(config)
+        assert data["skills"] == ["/other/skills"], data
+        assert "plugins" not in data, data
+        assert data["commands"] == {"my-command": keep}, data
+        assert data["model"] == "openai/local-model", data
+
+        # --remove on a helper-only config deletes the file and the now-empty dir.
+        os.remove(config)
+        run(project)
+        assert os.path.exists(config)
+        proc = run(project, "--remove")
+        assert proc.returncode == 0, proc.stderr
+        assert not os.path.exists(config), "config not deleted"
+        assert not os.path.exists(os.path.join(project, ".opencode")), ".opencode not deleted"
+
+        # --dry-run leaves the config and notes untouched.
+        notes = os.path.join(project, ".vibe-wise")
+        os.makedirs(notes, exist_ok=True)
+        run(project)
+        proc = run(project, "--remove", "--dry-run")
+        assert proc.returncode == 0, proc.stderr
+        assert os.path.exists(config) and os.path.isdir(notes), "dry-run changed something"
+
+        # --delete-notes removes the notes along with the config entries.
+        proc = run(project, "--remove", "--delete-notes")
+        assert proc.returncode == 0, proc.stderr
+        assert not os.path.exists(notes), "notes not deleted"
+
+        # --delete-notes without --remove is rejected.
+        proc = run(project, "--delete-notes")
         assert proc.returncode == 2, proc.stdout
 
         print("init tests OK")

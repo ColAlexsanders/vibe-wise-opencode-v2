@@ -29,14 +29,12 @@ read look like a failed tool call.
 
 ## Locate state
 
-Starting at the current working directory, look upward for `.vibe-wise/` or legacy
-`.sensible-vibes/`, preferring `.vibe-wise/` when both exist at the same level,
-stopping at the nearest `.git` directory or file (including a worktree root).
-Use the nearest existing state directory within that boundary. Keep using legacy
-notes in place; never merge, move, or reset them automatically. If there is none,
-create `.vibe-wise/` at the Git root, or current directory without Git. Do not use
-state from a parent repository, another worktree, or the installed package folder.
-Do not follow symlinked state directories or files; explain the issue instead.
+Use the project directory OpenCode is working in. Look there for `.vibe-wise/` or
+legacy `.sensible-vibes/`, preferring `.vibe-wise/` when both exist. Keep using
+legacy notes in place; never merge, move, or reset them automatically. If there is
+none, create `.vibe-wise/` in that directory. Do not read state from a parent
+directory or the installed plugin folder. Do not follow symlinked state directories
+or files; explain the issue instead.
 
 If `profile.md` exists, read it and `project-map.md`. Search the entire `progress.md`
 for pending decisions, then read their complete sections and other topics relevant
